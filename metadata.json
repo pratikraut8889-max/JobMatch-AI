@@ -1,0 +1,6 @@
+{
+  "name": "JobMatch AI",
+  "description": "AI-powered job description and resume analyzer, company researcher, recruiter contact finder, and tailored application email generator.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -33,7 +33,7 @@ export const GmailConnectCard: React.FC<GmailConnectCardProps> = ({
   const [demoInputOpen, setDemoInputOpen] = useState(false);
   const [demoEmail, setDemoEmail] = useState('');
 
-  // Handle OAuth code flow (popup window)
+  // Handle OAuth code flow (full-page redirect - no popup, no window.opener, no postMessage)
   const handleConnectGmail = async () => {
     setIsConnecting(true);
     setError(null);
@@ -44,50 +44,17 @@ export const GmailConnectCard: React.FC<GmailConnectCardProps> = ({
 
       if (!data.configured) {
         // If GOOGLE_CLIENT_ID not set, offer modal or test connection
-        setError(data.error || 'Google OAuth credentials not configured in .env.');
+        setError(data.error || 'Google OAuth credentials not configured in server environment.');
         setDemoInputOpen(true);
         setIsConnecting(false);
         return;
       }
 
-      // Open OAuth popup window
-      const width = 550;
-      const height = 650;
-      const left = window.screenX + (window.outerWidth - width) / 2;
-      const top = window.screenY + (window.outerHeight - height) / 2;
-
-      const popup = window.open(
-        data.url,
-        'google_oauth_popup',
-        `width=${width},height=${height},left=${left},top=${top},status=no,menubar=no,toolbar=no`
-      );
-
-      // Listen for postMessage from popup callback
-      const messageListener = (event: MessageEvent) => {
-        if (event.data?.type === 'GMAIL_CONNECTED') {
-          window.removeEventListener('message', messageListener);
-          setIsConnecting(false);
-          onRefreshProfile();
-        } else if (event.data?.type === 'GMAIL_ERROR') {
-          window.removeEventListener('message', messageListener);
-          setIsConnecting(false);
-          setError(event.data.error || 'Google authentication was cancelled.');
-        }
-      };
-
-      window.addEventListener('message', messageListener);
-
-      // Fallback timer in case popup closes or redirects
-      const checkPopupTimer = setInterval(() => {
-        if (!popup || popup.closed) {
-          clearInterval(checkPopupTimer);
-          setIsConnecting(false);
-          onRefreshProfile();
-        }
-      }, 1000);
+      // Full-page redirect (no popup, no window.opener, no postMessage)
+      window.location.href = data.url;
     } catch (err: any) {
       console.error('Failed to initiate Gmail OAuth:', err);
-      setError(err.message || 'Failed to start Google sign-in.');
+      setError(err.message || 'Failed to start Google authorization.');
       setIsConnecting(false);
     }
   };

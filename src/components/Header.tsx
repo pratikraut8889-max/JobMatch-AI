@@ -11,6 +11,8 @@ import {
   Settings,
   Mail,
   AlertTriangle,
+  User,
+  LogOut,
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -26,6 +28,9 @@ interface HeaderProps {
   onOpenSettings: () => void;
   connectedEmail?: string;
   isTokenExpired?: boolean;
+  currentUser?: { id: string; email: string; name: string; picture?: string } | null;
+  isAuthenticated?: boolean;
+  onLogout?: () => void;
   darkMode: boolean;
   onToggleDarkMode: () => void;
 }
@@ -43,6 +48,9 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenSettings,
   connectedEmail,
   isTokenExpired,
+  currentUser,
+  isAuthenticated,
+  onLogout,
   darkMode,
   onToggleDarkMode,
 }) => {
@@ -172,6 +180,44 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <Settings className="w-4 h-4" />
           </button>
+
+          {/* User Sign-In or Profile Badge */}
+          {isAuthenticated && currentUser ? (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-100 dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 text-xs text-slate-700 dark:text-slate-300">
+              {currentUser.picture ? (
+                <img
+                  src={currentUser.picture}
+                  alt={currentUser.name}
+                  className="w-4 h-4 rounded-full object-cover"
+                />
+              ) : (
+                <User className="w-3.5 h-3.5 text-slate-500" />
+              )}
+              <span className="hidden md:inline font-medium max-w-[120px] truncate">
+                {currentUser.name}
+              </span>
+              {onLogout && (
+                <button
+                  type="button"
+                  onClick={onLogout}
+                  className="ml-1 p-0.5 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 transition-colors cursor-pointer"
+                  title="Sign out"
+                  aria-label="Sign out"
+                >
+                  <LogOut className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+          ) : (
+            <a
+              href="/api/auth/login"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold text-slate-700 dark:text-slate-200 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 rounded-lg transition-colors border border-slate-200 dark:border-slate-700"
+              title="Sign in with your Google Account"
+            >
+              <User className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+              <span className="hidden sm:inline">Sign In</span>
+            </a>
+          )}
 
           {/* Quick Sample Action */}
           {activeView === 'analyze' && !hasResults && (

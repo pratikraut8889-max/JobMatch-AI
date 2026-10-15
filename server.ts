@@ -10,6 +10,8 @@ import crypto from 'crypto';
 
 import { safeFetchWebPage, encryptSecret } from './server/security';
 import { db } from './server/database';
+   import { authRouter } from './server/auth';
+   import { attachUser, requireAuth, assertSessionConfig } from './server/session';
 import {
   parseResumeWithGemini,
   analyzeJdWithGemini,
@@ -40,6 +42,9 @@ const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 const DAILY_ANALYSIS_LIMIT = parseInt(process.env.DAILY_ANALYSIS_LIMIT || '5', 10);
 
+// Verify session secret configuration at startup
+assertSessionConfig();
+
 // Security middlewares
 app.use(
   helmet({
@@ -50,16 +55,15 @@ app.use(
 app.use(cors());
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
+app.use(attachUser);
 
-// Helper to resolve user ID from header or default demo user
+// Helper to resolve user ID from authenticated session
 function getUserId(req: Request): string {
-  const headerId = req.headers['x-user-id'] as string;
-  if (headerId && headerId.trim()) return headerId.trim();
-  return 'default-user-01';
+  return req.user?.id || 'default-user-01';
 }
 
 // ==========================================
-// 1. HEALTH CHECK ENDPOINT
+// 1. HEALTH CHECK ENDPOINT (Public)
 // ==========================================
 app.get('/healthz', (req, res) => {
   res.json({
@@ -72,243 +76,12 @@ app.get('/healthz', (req, res) => {
 });
 
 // ==========================================
-// 2. USER & CONSENT ENDPOINTS
+// 2. AUTH & USER ENDPOINTS (Google OAuth + Sessions)
 // ==========================================
-app.get('/api/auth/me', (req, res) => {
-  const userId = getUserId(req);
-  const user = db.getUser(userId);
-  const hasGmailToken = !!db.getEncryptedToken(userId);
-  const isExpired = !!user.gmailTokenExpired || (!!user.connectedGmail && !hasGmailToken);
-  res.json({
-    ...user,
-    hasGmailToken,
-    isTokenExpired: isExpired,
-    gmailTokenExpired: isExpired,
-    dailyAnalysisLimit: DAILY_ANALYSIS_LIMIT,
-  });
-});
+app.use('/api/auth', authRouter);
 
-app.post('/api/auth/consent', (req, res) => {
-  const userId = getUserId(req);
-  const { consented } = req.body;
-  const updated = db.updateUserConsent(userId, !!consented);
-  res.json(updated);
-});
-
-// Google OAuth URL generation (prompt=consent select_account)
-app.get('/api/auth/google/url', (req, res) => {
-  const userId = getUserId(req);
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  const redirectUri =
-    process.env.GOOGLE_REDIRECT_URI ||
-    `${process.env.APP_URL || 'http://localhost:3000'}/api/auth/google/callback`;
-
-  if (!clientId || !clientSecret) {
-    return res.json({
-      configured: false,
-      redirectUri,
-      error: 'GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET is missing in server environment variables.',
-    });
-  }
-
-  const params = new URLSearchParams({
-    client_id: clientId,
-    redirect_uri: redirectUri,
-    response_type: 'code',
-    scope: 'https://www.googleapis.com/auth/gmail.send',
-    access_type: 'offline',
-    prompt: 'consent select_account',
-    state: userId,
-  });
-
-  const url = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
-  res.json({ configured: true, url, redirectUri, clientId });
-});
-
-// Google OAuth Callback (authorization code flow)
-app.get('/api/auth/google/callback', async (req, res) => {
-  const { code, state, error } = req.query;
-  const userId = (state as string) || 'default-user-01';
-
-  if (error) {
-    return res.send(`
-      <!DOCTYPE html>
-      <html><body>
-        <script>
-          if (window.opener) {
-            window.opener.postMessage({ type: 'GMAIL_ERROR', error: '${error}' }, '*');
-            window.close();
-          } else {
-            window.location.href = '/?gmail_error=${encodeURIComponent(String(error))}';
-          }
-        </script>
-        <p>Gmail authorization was cancelled or denied: ${error}. Closing...</p>
-      </body></html>
-    `);
-  }
-
-  if (!code) {
-    return res.status(400).send('Authorization code is missing.');
-  }
-
-  try {
-    const clientId = process.env.GOOGLE_CLIENT_ID || '';
-    const clientSecret = process.env.GOOGLE_CLIENT_SECRET || '';
-    const redirectUri =
-      process.env.GOOGLE_REDIRECT_URI ||
-      `${process.env.APP_URL || 'http://localhost:3000'}/api/auth/google/callback`;
-
-    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        code: String(code),
-        client_id: clientId,
-        client_secret: clientSecret,
-        redirect_uri: redirectUri,
-        grant_type: 'authorization_code',
-      }),
-    });
-
-    if (!tokenRes.ok) {
-      const errJson = await tokenRes.json().catch(() => ({}));
-      throw new Error(errJson.error_description || errJson.error || 'Failed to exchange authorization code for tokens');
-    }
-
-    const tokenData = await tokenRes.json();
-    const accessToken = tokenData.access_token;
-    const refreshToken = tokenData.refresh_token;
-
-    if (refreshToken) {
-      const encrypted = encryptSecret(refreshToken);
-      db.saveEncryptedToken(userId, encrypted);
-    }
-
-    // Attempt to query connected Gmail address from Gmail Profile
-    let emailAddress = '';
-    try {
-      const profileRes = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile', {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-
-      if (profileRes.ok) {
-        const profileData = await profileRes.json();
-        if (profileData.emailAddress) {
-          emailAddress = profileData.emailAddress;
-        }
-      }
-    } catch {
-      // Profile endpoint may be blocked if only gmail.send scope is granted
-    }
-
-    if (emailAddress) {
-      db.setConnectedGmail(userId, emailAddress);
-      return res.send(`
-        <!DOCTYPE html>
-        <html>
-          <head><title>Gmail Connected</title></head>
-          <body style="font-family:system-ui,-apple-system,sans-serif;text-align:center;padding:48px 24px;background:#f8fafc;color:#0f172a;">
-            <div style="max-width:420px;margin:0 auto;background:white;padding:32px;border-radius:16px;border:1px solid #e2e8f0;box-shadow:0 4px 6px -1px rgba(0,0,0,0.05);">
-              <div style="width:48px;height:48px;border-radius:12px;background:#ecfdf5;color:#059669;display:flex;align-items:center;justify-content:center;margin:0 auto 16px;font-size:24px;">✓</div>
-              <h2 style="font-size:18px;font-weight:700;margin:0 0 8px;">Gmail Account Connected!</h2>
-              <p style="color:#475569;font-size:13px;margin:0 0 16px;">Sending as: <strong style="color:#2563eb;font-family:monospace;">${emailAddress}</strong></p>
-              <p style="color:#94a3b8;font-size:12px;margin:0;">Returning to JobMatch AI...</p>
-            </div>
-            <script>
-              if (window.opener) {
-                window.opener.postMessage({ type: 'GMAIL_CONNECTED', email: '${emailAddress}' }, '*');
-                setTimeout(() => window.close(), 700);
-              } else {
-                window.location.href = '/?gmail_connected=true&email=${encodeURIComponent(emailAddress)}';
-              }
-            </script>
-          </body>
-        </html>
-      `);
-    }
-
-    // If profile was not readable with gmail.send scope only, allow confirming email in popup
-    res.send(`
-      <!DOCTYPE html>
-      <html>
-        <head><title>Confirm Connected Gmail</title></head>
-        <body style="font-family:system-ui,-apple-system,sans-serif;text-align:center;padding:40px 20px;background:#f8fafc;color:#0f172a;">
-          <div style="max-width:420px;margin:0 auto;background:white;padding:28px;border-radius:16px;border:1px solid #e2e8f0;box-shadow:0 4px 6px -1px rgba(0,0,0,0.05);">
-            <div style="width:44px;height:44px;border-radius:12px;background:#eff6ff;color:#2563eb;display:flex;align-items:center;justify-content:center;margin:0 auto 12px;font-size:22px;">✉</div>
-            <h2 style="font-size:18px;font-weight:700;margin:0 0 6px;">Gmail Access Granted</h2>
-            <p style="color:#64748b;font-size:12px;line-height:1.5;margin:0 0 20px;">
-              Please confirm the Gmail address you just selected so JobMatch AI displays <strong>"Sending as: &lt;your email&gt;"</strong>.
-            </p>
-            <form id="emailForm" onsubmit="submitEmail(event)" style="display:flex;flex-direction:column;gap:12px;">
-              <input id="emailInput" type="email" placeholder="e.g. yourname@gmail.com" required style="padding:10px 14px;border:1px solid #cbd5e1;border-radius:10px;font-size:13px;outline:none;" />
-              <button type="submit" style="padding:10px 16px;background:#2563eb;color:white;border:none;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;">Confirm Sender Address</button>
-            </form>
-          </div>
-          <script>
-            async function submitEmail(e) {
-              e.preventDefault();
-              const email = document.getElementById('emailInput').value.trim();
-              if (!email) return;
-              try {
-                await fetch('/api/auth/google/confirm-email', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json', 'x-user-id': '${userId}' },
-                  body: JSON.stringify({ email })
-                });
-                if (window.opener) {
-                  window.opener.postMessage({ type: 'GMAIL_CONNECTED', email }, '*');
-                  setTimeout(() => window.close(), 500);
-                } else {
-                  window.location.href = '/?gmail_connected=true&email=' + encodeURIComponent(email);
-                }
-              } catch (err) {
-                alert('Failed to save email address.');
-              }
-            }
-          </script>
-        </body>
-      </html>
-    `);
-  } catch (err: any) {
-    console.error('OAuth token exchange error:', err);
-    res.status(500).send(`
-      <!DOCTYPE html>
-      <html><body style="font-family:sans-serif;padding:30px;">
-        <h3 style="color:#dc2626;">Gmail Authorization Failed</h3>
-        <p>${err.message}</p>
-        <button onclick="window.close()" style="padding:8px 16px;cursor:pointer;">Close Window</button>
-      </body></html>
-    `);
-  }
-});
-
-// Endpoint to confirm or update connected Gmail address
-app.post('/api/auth/google/confirm-email', (req, res) => {
-  const userId = getUserId(req);
-  const { email } = req.body;
-  if (!email || !email.includes('@')) {
-    return res.status(400).json({ error: 'Valid Gmail address is required.' });
-  }
-  const user = db.setConnectedGmail(userId, email.trim());
-  res.json({ success: true, user });
-});
-
-// Demo/Testing Connect Endpoint (allows quick verification even before GCP configuration)
-app.post('/api/auth/google/demo-connect', (req, res) => {
-  const userId = getUserId(req);
-  const { email } = req.body;
-  const targetEmail = (email && email.trim()) || 'alex.chen.dev@gmail.com';
-  db.saveEncryptedToken(userId, `demo:${targetEmail}`);
-  const user = db.setConnectedGmail(userId, targetEmail);
-  res.json({ success: true, user, email: targetEmail });
-});
-
-app.post('/api/auth/disconnect-gmail', async (req, res) => {
-  const userId = getUserId(req);
-  await disconnectUserGmail(userId);
-  res.json({ success: true, message: 'Gmail account disconnected and token revoked.' });
-});
+// Protect all remaining /api endpoints
+app.use('/api', requireAuth);
 
 // GDPR / DPDP "Delete My Data"
 app.delete('/api/privacy/delete-my-data', (req, res) => {

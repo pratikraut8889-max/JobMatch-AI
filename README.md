@@ -100,8 +100,10 @@ Job seekers input target job postings (via URL, pasted text, or screenshots) alo
    GEMINI_API_KEY="your_gemini_api_key"
    APP_URL="http://localhost:3000"
    PORT=3000
-   GOOGLE_CLIENT_ID=""
-   GOOGLE_CLIENT_SECRET=""
+   GOOGLE_CLIENT_ID="your_google_client_id"
+   GOOGLE_CLIENT_SECRET="your_google_client_secret"
+   GOOGLE_REDIRECT_URI="http://localhost:3000/api/auth/google/callback"
+   SESSION_SECRET="your_random_session_secret_32_chars_minimum"
    ENCRYPTION_KEY="jobmatch_super_secure_key_32chars!"
    DAILY_EMAIL_LIMIT="20"
    DAILY_ANALYSIS_LIMIT="5"

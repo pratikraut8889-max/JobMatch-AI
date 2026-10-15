@@ -9,6 +9,15 @@
       "analysesToday": 0,
       "emailsSentToday": 0,
       "gmailTokenExpired": false
+    },
+    "g_demo_user_101": {
+      "id": "g_demo_user_101",
+      "email": "g_demo_user_101@user.local",
+      "name": "Job Seeker",
+      "createdAt": "2026-10-15T18:48:47.734Z",
+      "hasConsented": false,
+      "analysesToday": 0,
+      "emailsSentToday": 0
     }
   },
   "userTokens": {},

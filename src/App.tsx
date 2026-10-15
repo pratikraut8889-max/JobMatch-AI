@@ -77,11 +77,41 @@ export default function App() {
   const [isPrivacyModalOpen, setIsPrivacyModalOpen] = useState(false);
   const [isOAuthModalOpen, setIsOAuthModalOpen] = useState(false);
 
+  // Authentication & Current User
+  const [currentUser, setCurrentUser] = useState<{
+    id: string;
+    email: string;
+    name: string;
+    picture?: string;
+  } | null>(null);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+
   // Fetch initial profile & data
   useEffect(() => {
     fetchProfile();
     fetchResumes();
     fetchTracker();
+  }, []);
+
+  // Handle URL redirect query params (from Google OAuth callback)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const gmailConnected = params.get('gmail_connected');
+    const gmailError = params.get('gmail_error');
+    const authError = params.get('auth_error');
+
+    if (gmailConnected) {
+      fetchProfile();
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+    if (gmailError) {
+      setGlobalError(`Gmail authorization issue: ${decodeURIComponent(gmailError)}`);
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+    if (authError) {
+      setGlobalError(`Sign-in issue: ${decodeURIComponent(authError)}`);
+      window.history.replaceState({}, '', window.location.pathname);
+    }
   }, []);
 
   // Sync dark mode class on document
@@ -97,13 +127,31 @@ export default function App() {
     try {
       const res = await fetch('/api/auth/me');
       if (res.ok) {
-        const user = await res.json();
-        setHasConsented(!!user.hasConsented);
-        setConnectedEmail(user.connectedGmail || undefined);
-        setIsTokenExpired(!!user.isTokenExpired || !!user.gmailTokenExpired);
+        const data = await res.json();
+        setHasConsented(!!data.hasConsented);
+        setConnectedEmail(data.connectedGmail || undefined);
+        setIsTokenExpired(!!data.isTokenExpired || !!data.gmailTokenExpired);
+        if (data.authenticated && data.user) {
+          setIsAuthenticated(true);
+          setCurrentUser(data.user);
+        } else {
+          setIsAuthenticated(false);
+          setCurrentUser(null);
+        }
       }
     } catch (e) {
       console.warn('Profile fetch warning:', e);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+      setIsAuthenticated(false);
+      setCurrentUser(null);
+      fetchProfile();
+    } catch (e) {
+      console.error('Logout error:', e);
     }
   };
 
@@ -408,6 +456,9 @@ export default function App() {
         onOpenSettings={() => setIsSettingsModalOpen(true)}
         connectedEmail={connectedEmail}
         isTokenExpired={isTokenExpired}
+        currentUser={currentUser}
+        isAuthenticated={isAuthenticated}
+        onLogout={handleLogout}
         darkMode={darkMode}
         onToggleDarkMode={() => setDarkMode(!darkMode)}
       />

@@ -10,8 +10,8 @@ import crypto from 'crypto';
 
 import { safeFetchWebPage, encryptSecret } from './server/security';
 import { db } from './server/database';
-   import { authRouter } from './server/auth';
-   import { attachUser, requireAuth, assertSessionConfig } from './server/session';
+import { authRouter, handleGoogleCallback } from './server/auth';
+import { attachUser, requireAuth, assertSessionConfig } from './server/session';
 import {
   parseResumeWithGemini,
   analyzeJdWithGemini,
@@ -59,7 +59,10 @@ app.use(attachUser);
 
 // Helper to resolve user ID from authenticated session
 function getUserId(req: Request): string {
-  return req.user?.id || 'default-user-01';
+  if (!req.user) {
+    throw new Error('Unauthenticated user');
+  }
+  return req.user.id;
 }
 
 // ==========================================
@@ -78,6 +81,10 @@ app.get('/healthz', (req, res) => {
 // ==========================================
 // 2. AUTH & USER ENDPOINTS (Google OAuth + Sessions)
 // ==========================================
+// Google OAuth Callbacks (registered before Vite / static SPA catch-all)
+app.get('/auth/google/callback', handleGoogleCallback);
+app.get('/api/auth/google/callback', handleGoogleCallback);
+
 app.use('/api/auth', authRouter);
 
 // Protect all remaining /api endpoints

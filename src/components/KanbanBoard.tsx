@@ -58,7 +58,7 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({
 
     const newApp: TrackerApplication = {
       id: crypto.randomUUID(),
-      userId: 'default-user-01',
+      userId: '',
       jobTitle: newTitle.trim(),
       companyName: newCompany.trim(),
       status: newStatus,
